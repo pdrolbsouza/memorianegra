@@ -61,7 +61,7 @@ Todos os resultados são salvos dentro da pasta `Registros/` (criada automaticam
 
 ---
 
-# Obs:
+## Observaão
 
 - O script foi feito e testado em um ambiente Linux com o `yaz-client`;
 - Fazer buscas maiores pode acabar exigindo um pouco de seu computador, por isso, pode ser conveniente adicionar pausas na execução do código. Ex:
@@ -69,7 +69,7 @@ Todos os resultados são salvos dentro da pasta `Registros/` (criada automaticam
     while IFS= read -r termo; do
         ./download.sh "$termo"
         sleep 2   # pausa opcional para não sobrecarregar o servidor
-    done < termos.tx
+    done < termos.txt
     ```
 - Para depurar erros de busca, é muito útil fazer testes manuais dentro do `yaz-client` 
 - O código transforma frases como "Extinção da África" para "Extinção África" por conta de uma limitação do sistema de _stopwords_ do servidor original.
@@ -114,6 +114,22 @@ Registros/
 │   └── saídas/
 │       └── resultados_outro_termo_resultados.csv
 └── ...
+```
+Para além de gerar uma saída para cada pasta, ao final de sua execução, o código cria um arquivo chamado `resultado_geral.csv`, nele está contido *TODOS* os registros de todas as pesquisas feitas. Ele fica salvo dentro da pasta de Registros da seguinte forma:
+```text
+Registros/
+├── Preconceito_Racial_resultados/
+│   ├── xml/ ...
+│   ├── marc/ ...
+│   ├── sutrs/ ...
+│   ├── opac/ ...
+│   └── saídas/
+│       └── resultados_Preconceito_Racial_resultados.csv
+├── Catimbó_resultados/
+│   └── saídas/
+│       └── resultados_Catimbó_resultados.csv
+├── ... (demais pastas)
+└── resultado_geral.csv  
 ```
 
 ## Campos extraídos para o CSV

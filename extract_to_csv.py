@@ -20,20 +20,15 @@ def decodificar_escapamentos(texto):
     """
     if not texto or not isinstance(texto, str):
         return texto
-    # Encontra todas as ocorrências de \xXX ou \Xxx
     padrao = re.compile(r'\\[xX]([0-9A-Fa-f]{2})')
     partes = []
     pos = 0
     for match in padrao.finditer(texto):
-        # Texto antes do escape (codificado em Latin-1)
         partes.append(texto[pos:match.start()].encode('latin-1', errors='replace'))
-        # Byte do escape
         byte_val = int(match.group(1), 16)
         partes.append(bytes([byte_val]))
         pos = match.end()
-    # Restante do texto
     partes.append(texto[pos:].encode('latin-1', errors='replace'))
-    # Junta todos os bytes e decodifica como UTF-8
     try:
         resultado = b''.join(partes).decode('utf-8')
     except UnicodeDecodeError:
@@ -41,7 +36,7 @@ def decodificar_escapamentos(texto):
     return resultado
 
 # ------------------------------------------------------------
-# Outras funções auxiliares (limpeza, mapeamento)
+# Outras funções auxiliares
 # ------------------------------------------------------------
 def limpar_autor(nome):
     if not nome:
@@ -203,7 +198,6 @@ def extrair_sutrs(caminho_sutrs):
     except Exception:
         return {"modelo": "", "local_defesa": "", "descricao": ""}
 
-    # Primeiro, decodifica escapes em todo o conteúdo
     conteudo = decodificar_escapamentos(conteudo)
 
     modelo = ""
@@ -239,7 +233,6 @@ def extrair_sutrs(caminho_sutrs):
     if match:
         descricao = match.group(1).strip()
 
-    # Aplica decodificação e normalização nos campos extraídos (por segurança)
     modelo = decodificar_escapamentos(modelo)
     local_defesa = decodificar_escapamentos(local_defesa)
     descricao = decodificar_escapamentos(descricao)
@@ -253,7 +246,31 @@ def extrair_sutrs(caminho_sutrs):
 # ------------------------------------------------------------
 # Processamento principal
 # ------------------------------------------------------------
-def processar_pastas(pastas, filtro_id=None):
+def processar_pastas(pastas, filtro_id=None, gerar_geral=True):
+    """
+    Processa uma lista de pastas.
+    Gera CSVs individuais dentro de cada pasta (em 'saídas/').
+    Se gerar_geral for True, também gera um CSV consolidado na raiz do diretório base.
+    """
+    # Cabeçalho do CSV
+    cabecalho = [
+        "identifier",
+        "titulo",
+        "autor",
+        "co_autor",
+        "orientador",
+        "data",
+        "paginas",
+        "local_publicacao",
+        "subjects",
+        "modelo_trabalho",
+        "descricao",
+        "local_defesa"
+    ]
+
+    # Lista para acumular todas as linhas (para o CSV geral)
+    linhas_geral = []
+
     for pasta in pastas:
         print(f"Processando pasta: {pasta.name}")
         pasta_saida = pasta / "saídas"
@@ -265,24 +282,11 @@ def processar_pastas(pastas, filtro_id=None):
             nome_csv = f"resultados_{pasta.name}.csv"
 
         caminho_csv = pasta_saida / nome_csv
-
         total_linhas = 0
+
         with open(caminho_csv, "w", newline="", encoding="utf-8-sig") as csvfile:
             writer = csv.writer(csvfile, delimiter=";", quoting=csv.QUOTE_MINIMAL)
-            writer.writerow([
-                "identifier",
-                "titulo",
-                "autor",
-                "co_autor",
-                "orientador",
-                "data",
-                "paginas",
-                "local_publicacao",
-                "subjects",
-                "modelo_trabalho",
-                "descricao",
-                "local_defesa"
-            ])
+            writer.writerow(cabecalho)
 
             for xml_file in pasta.glob("xml/*.xml"):
                 identifier = xml_file.stem
@@ -311,9 +315,23 @@ def processar_pastas(pastas, filtro_id=None):
                 ]
 
                 writer.writerow(linha)
+                # Acumula para o CSV geral (se não houver filtro)
+                if gerar_geral and not filtro_id:
+                    linhas_geral.append(linha)
                 total_linhas += 1
 
         print(f"CSV gerado: {caminho_csv} com {total_linhas} registros.")
+
+    # Gera o CSV geral se solicitado e se houver pastas
+    if gerar_geral and not filtro_id and pastas:
+        # O diretório base é o pai da primeira pasta (ex: Registros/)
+        dir_base = pastas[0].parent
+        caminho_geral = dir_base / "resultado_geral.csv"
+        with open(caminho_geral, "w", newline="", encoding="utf-8-sig") as csvfile:
+            writer = csv.writer(csvfile, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(cabecalho)
+            writer.writerows(linhas_geral)
+        print(f"CSV geral gerado: {caminho_geral} com {len(linhas_geral)} registros.")
 
 # ------------------------------------------------------------
 # Interface de linha de comando
@@ -333,6 +351,7 @@ def main():
     arg1 = sys.argv[1]
     arg2 = sys.argv[2] if len(sys.argv) > 2 else None
 
+    # Caso 1: base completa (gera CSVs por pasta E CSV geral)
     if len(sys.argv) == 2:
         caminho_base = Path(arg1)
         if not caminho_base.exists():
@@ -342,15 +361,17 @@ def main():
         if not pastas:
             print(f"Nenhuma pasta '*_resultados' encontrada em {caminho_base}.")
             sys.exit(1)
-        processar_pastas(pastas, filtro_id=None)
+        processar_pastas(pastas, filtro_id=None, gerar_geral=True)
 
+    # Caso 2: pasta específica (gera apenas CSV da pasta, sem geral)
     elif len(sys.argv) == 2 and Path(arg1).is_dir() and "_resultados" in arg1:
         pasta = Path(arg1)
         if not pasta.exists():
             print(f"Erro: pasta '{pasta}' não encontrada.")
             sys.exit(1)
-        processar_pastas([pasta], filtro_id=None)
+        processar_pastas([pasta], filtro_id=None, gerar_geral=False)
 
+    # Caso 3: filtro por identificador (gera CSVs por pasta com filtro, sem geral)
     elif len(sys.argv) == 3:
         caminho_base = Path(arg1)
         filtro_id = arg2
@@ -361,7 +382,7 @@ def main():
         if not pastas:
             print(f"Nenhuma pasta '*_resultados' encontrada em {caminho_base}.")
             sys.exit(1)
-        processar_pastas(pastas, filtro_id=filtro_id)
+        processar_pastas(pastas, filtro_id=filtro_id, gerar_geral=False)
 
     else:
         print("Argumentos não reconhecidos. Consulte o uso com: python3 extract_to_csv.py")
