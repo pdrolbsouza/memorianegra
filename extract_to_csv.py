@@ -351,7 +351,16 @@ def main():
     arg1 = sys.argv[1]
     arg2 = sys.argv[2] if len(sys.argv) > 2 else None
 
-    # Caso 1: base completa (gera CSVs por pasta E CSV geral)
+    # Caso 2 (prioridade): se arg1 é uma pasta que termina com "_resultados"
+    if Path(arg1).is_dir() and arg1.endswith("_resultados"):
+        pasta = Path(arg1)
+        if not pasta.exists():
+            print(f"Erro: pasta '{pasta}' não encontrada.")
+            sys.exit(1)
+        processar_pastas([pasta], filtro_id=None, gerar_geral=False)
+        return
+
+    # Caso 1: arg1 é diretório base (como 'Registros')
     if len(sys.argv) == 2:
         caminho_base = Path(arg1)
         if not caminho_base.exists():
@@ -362,17 +371,10 @@ def main():
             print(f"Nenhuma pasta '*_resultados' encontrada em {caminho_base}.")
             sys.exit(1)
         processar_pastas(pastas, filtro_id=None, gerar_geral=True)
+        return
 
-    # Caso 2: pasta específica (gera apenas CSV da pasta, sem geral)
-    elif len(sys.argv) == 2 and Path(arg1).is_dir() and "_resultados" in arg1:
-        pasta = Path(arg1)
-        if not pasta.exists():
-            print(f"Erro: pasta '{pasta}' não encontrada.")
-            sys.exit(1)
-        processar_pastas([pasta], filtro_id=None, gerar_geral=False)
-
-    # Caso 3: filtro por identificador (gera CSVs por pasta com filtro, sem geral)
-    elif len(sys.argv) == 3:
+    # Caso 3: arg1 base + arg2 identificador
+    if len(sys.argv) == 3:
         caminho_base = Path(arg1)
         filtro_id = arg2
         if not caminho_base.exists():
@@ -383,9 +385,9 @@ def main():
             print(f"Nenhuma pasta '*_resultados' encontrada em {caminho_base}.")
             sys.exit(1)
         processar_pastas(pastas, filtro_id=filtro_id, gerar_geral=False)
+        return
 
-    else:
-        print("Argumentos não reconhecidos. Consulte o uso com: python3 extract_to_csv.py")
+    print("Argumentos não reconhecidos. Consulte o uso com: python3 extract_to_csv.py")
 
 if __name__ == "__main__":
     main()
