@@ -1,170 +1,177 @@
 # Geração de arquivos de registro da Base USP
 
-O código ainda está numa versão inicial e está sujeito a alterações, mas ele já é capaz de fazer buscas na base da USP e extrair as informações dos arquivos em `marc`, `xml`, `sutrs` e `opac` .
+O código ainda está em versão inicial e sujeito a alterações, mas já é capaz de realizar buscas na base da USP e extrair as informações dos arquivos em `marc`, `xml`, `sutrs` e `opac`.
 
-## Nomeação dos arquivos
+## Nomeação e identificação dos arquivos
 
-Por padrão, o script tenta usar o conteúdo da tag <identifier> do XML como nome do arquivo (ex: 8585775092.xml). Quando esse campo não está presente, o arquivo recebe um nome sequencial de 5 dígitos (00000.xml, 00001.xml etc.), baseado na posição do registro.
+Cada registro recebe um **identificador único baseado no hash SHA-256 do seu próprio conteúdo XML**. Especificamente, após o download e a limpeza do XML, é calculado o hash criptográfico desse conteúdo, e os **primeiros 16 caracteres hexadecimais** são usados como nome base do arquivo.
 
-Importante: independentemente do formato (marc, sutrs, opac), todos os arquivos referentes ao mesmo registro recebem o mesmo nome, alterando apenas a extensão.
+**Exemplo:** `a3f5c8d9e2b1a4c6.xml`
 
-> Note que todo o resultado passa por um pequeno processo de sanitização (espaços, dois-pontos, barras, etc.) e os substituindo por `_`.  
+
+**Importante:** independentemente do formato (`xml`, `marc`, `sutrs`, `opac`), todos os arquivos referentes ao mesmo registro recebem o **mesmo hash** como nome, alterando apenas a extensão.
+
+## Deduplicação automática
+
+O script mantém um **índice global** no arquivo `Registros/.ids_index.txt`, que armazena todos os hashes já baixados. Antes de salvar um novo registro, o script verifica se o hash já existe nesse índice:
+
+- **Se for novo** → baixa os formatos restantes (MARC, SUTRS, OPAC) e salva todos com o hash como nome.
+- **Se já existir** → exibe a mensagem `"já existe em outra pasta. Pulando."` e ignora o registro.
+
+Isso evita duplicatas mesmo quando o mesmo registro aparece em buscas com termos diferentes (ex: "Preconceito Racial" e "Racismo").
+
+> Para reiniciar a coleção do zero, basta apagar a pasta `Registros/` ou o arquivo `Registros/.ids_index.txt`.
 
 ---
 
 # Funcionamento
 
-O script se resume a uma função principal (executar_busca). Para cada termo de busca fornecido, ele:
+O script se resume a uma função principal (`executar_busca`). Para cada termo de busca fornecido, ele:
 
-1. Monta a query adequada (explicada abaixo).
-2. Envia a busca ao servidor e obtém o número total de hits ($HITS).
-3. Baixa todos os registros em XML de uma só vez (uso de show 1+$HITS).
-4. Extrai os identifiers e salva cada XML individualmente.
-5. Para os formatos USmarc, SUTRS e OPAC, baixa cada registro separadamente (loop de 1 a $HITS), limpando os cabeçalhos e salvando com o mesmo nome base.
+1. **Remove stopwords** do termo e **converte para maiúsculas** (exigido pelo servidor no campo de assunto).
+2. **Monta a query** apropriada (ver seção "Critérios de personalização").
+3. **Envia a busca** ao servidor e obtém o número total de hits (`$HITS`).
+4. **Baixa todos os registros em XML** de uma só vez usando `show 1+$HITS`, dividindo o resultado em arquivos temporários (um por registro).
+5. Para **cada registro**:
+   - Calcula o **hash SHA-256** do XML (16 primeiros caracteres).
+   - Consulta o **índice global** para verificar duplicata.
+   - Se for novo, **baixa MARC, SUTRS e OPAC** individualmente (via `show $numero`) e salva todos os 4 formatos usando o hash como nome.
 
-## *IMPORTANTE*
-- O script funciona de uma forma pontual no que diz respeito ao seu mecanismo de busca. Pegando um exemplo prático, pode ser que ao utilizar o comando: `find CANDOMBLÉ` dentro do _cliente yaz_ ele retorne 594 resultados. Porém no `.sh`, ao executar o comando `./download.sh CANDOMBLÉ` o resultado que será obtido seria de apenas 460. Isso porque o script faz uma filtragem baseando-se *apenas* se as palavras buscadas estão no campo *assunto*. Esse é o efeito de utilizar `@attr 1=21` na montagem da `query` (iniciada na linha 55).
-Caso seja mais conveniente capturar mais resultados, a alteração a ser feita é fazer uma substituição de `@attr 1=21` para `@attr 1=7`, que busca em todos os campos. 
+## ⚠️ IMPORTANTE: escopo da busca
+
+O script foi configurado para buscar **apenas no campo de assunto** (`@attr 1=21`). Isso significa que os resultados podem ser mais restritos do que uma busca geral no `yaz-client`.
+
+**Exemplo prático:**
+- No cliente yaz: `find CANDOMBLÉ` → 594 resultados.
+- No script: `./download.sh CANDOMBLÉ` → 460 resultados.
+
+Isso ocorre porque apenas registros que possuem o termo como **descritor de assunto controlado** são retornados. Para capturar mais resultados (busca em todos os campos), substitua `@attr 1=21` por `@attr 1=7` na montagem da query.
 
 ---
 
 # Utilização com uma lista de termos
 
-- O código vem com um arquivo chamado `termos.txt` em sua pasta contendo palavras que compõem um arquivo de biblioteca temática da USP. 
+O código acompanha um arquivo `termos.txt` contendo os descritores da biblioteca temática da USP. Para processar todos de uma vez:
 
-```
-while read -r termo; do
+```bash
+while IFS= read -r termo; do
     ./download.sh "$termo"
+    sleep 2   # pausa opcional para não sobrecarregar o servidor
 done < termos.txt
 ```
 
 ## Nuances de execução
 
-Termos que contêm espaços (ex: "JOGO DE BÚZIOS") devem ser escritos entre aspas no arquivo termos.txt. O script quebra a frase em palavras e monta uma query com @and entre cada palavra. Isso funciona bem para a maioria dos casos, mas pode encontrar problemas com stop words (palavras muito comuns como da, de, do, e, etc.). Por exemplo, buscando "Extinção da África", a palavra _da_ pode ser ignorada pelo servidor, reduzindo a precisão.
+- **Termos compostos** (com espaços, ex: `"JOGO DE BÚZIOS"`) devem estar entre aspas no `termos.txt`. O script quebra a frase em palavras e monta a query com `@and` entre cada uma.
+- **Stopwords**: palavras muito comuns (`da`, `de`, `do`, `e`, etc.) são removidas automaticamente para evitar falhas. Por exemplo, `"Extinção da África"` se torna `"Extinção África"` antes de virar query.
+- **Acentos**: o script preserva acentos e caracteres especiais, enviando-os como estão para o servidor.
 
-## Critérios de personalização
+## Critérios de personalização da query
 
-Na criação do código a variável `QUERY` é montada de duas formas:
-    - Termo simples (sem espaços): `find @attr 1=21 termo`
-    - Termo composto (com espaços): `find @and @attr 1=21 palavra1 @attr 1=21 palavra2 ...`
+A variável `QUERY` é montada de duas formas:
 
-Mas ela é passível de ser alterada para outros critérios com:
+- **Termo simples** (sem espaços): `find @attr 1=21 TERMO`
+- **Termo composto** (com espaços): `find @and @attr 1=21 PALAVRA1 @attr 1=21 PALAVRA2 ...`
 
-- `@attr 4=1` busca uma adjacência EXATA.
-- `@attr 1=7` busca palavras chave sem necessidade de uma adjacência.
-- `@attr 1=21` se refere ao atributo de "Assunto" em buscas mais elaboradas.
-- Nenhum atributo	Busca geral no servidor (comportamento padrão do find)
+A query pode ser personalizada conforme a necessidade (mas isso cabe a fazer uma alteração dentro do código,não é algo disponível para o usuário do sistema):
 
-# Estrutura de diretórios
-
-Todos os resultados são salvos dentro da pasta `Registros/` (criada automaticamente). Dentro dela, cada termo de busca gera uma subpasta com o formato `{termo_sanitizado}_resultados/`, contendo subpastas `xml/`, `marc/`, `sutrs/`, `opac/`. Exemplo:
+| Atributo | Efeito |
+| :--- | :--- |
+| `@attr 1=21` | **Padrão do script.** Busca apenas no campo **Assunto** (vocabulário controlado). |
+| `@attr 1=7` | Busca por palavras-chave em todos os campos (mais abrangente). |
+| `@attr 4=1` | Busca por adjacência **exata** (a frase deve aparecer literalmente). |
+| Sem atributo | Busca geral com comportamento padrão do servidor. |
 
 ---
 
-## Observaão
+# Estrutura de diretórios
 
-- O script foi feito e testado em um ambiente Linux com o `yaz-client`;
-- Fazer buscas maiores pode acabar exigindo um pouco de seu computador, por isso, pode ser conveniente adicionar pausas na execução do código. Ex:
-    ```
-    while IFS= read -r termo; do
-        ./download.sh "$termo"
-        sleep 2   # pausa opcional para não sobrecarregar o servidor
-    done < termos.txt
-    ```
-- Para depurar erros de busca, é muito útil fazer testes manuais dentro do `yaz-client` 
-- O código transforma frases como "Extinção da África" para "Extinção África" por conta de uma limitação do sistema de _stopwords_ do servidor original.
+Todos os resultados são salvos dentro da pasta `Registros/` (criada automaticamente). A estrutura final é:
+
+```text
+Registros/
+├── .ids_index.txt                 ← índice global de hashes (arquivo oculto)
+├── Preconceito_Racial_resultados/
+│   ├── xml/                       ← arquivos .xml com hash como nome
+│   ├── marc/                      ← arquivos .marc
+│   ├── sutrs/                     ← arquivos .sutrs
+│   ├── opac/                      ← arquivos .opac
+│   └── saídas/                    ← CSVs gerados pelo extract_to_csv.py
+├── Catimbó_resultados/
+│   └── ...
+├── ...
+└── resultado_geral.csv            ← CSV consolidado com todos os registros
+```
+
+---
+
+## Observações
+
+- O script foi desenvolvido e testado em ambiente **Linux** com `yaz-client` instalado.
+- Buscas grandes podem consumir tempo e recursos, por isso recomenda-se adicionar pausas entre execuções.
+- Para depurar erros de busca, é útil testar manualmente no `yaz-client`.
+- Termos com stopwords são ajustados automaticamente antes do envio ao servidor.
 
 ---
 
 # Transformando os registros em `.CSV`
 
-Além do download dos registros, disponibilizamos um script Python (extract_to_csv.py) que extrai informações estruturadas dos arquivos baixados e as organiza em uma planilha CSV. Esse script percorre as pastas de resultados, lê os arquivos .xml, .opac e .sutrs de cada registro, e gera um arquivo .csv com os campos mais relevantes para sua biblioteca temática.
+Além do download dos registros, tem o script Python `extract_to_csv.py`, que extrai informações estruturadas dos arquivos baixados e as organiza em uma planilha CSV. Ele percorre as pastas de resultados, lê os arquivos `.xml`, `.opac` e `.sutrs` de cada registro e gera um CSV com os campos mais relevantes.
 
 ## Como usar
 
-O script pode ser executado de três formas principais:
-```
+O script pode ser executado de três formas:
+
+```bash
 # 1. Processar todas as pastas dentro de 'Registros/'
 python3 extract_to_csv.py Registros
 
-# 2. Processar apenas uma pasta específica (ex: Preconceito_Racial_resultados)
+# 2. Processar apenas uma pasta específica
 python3 extract_to_csv.py Registros/Preconceito_Racial_resultados
 
-# 3. Filtrar por um identificador (ex: 00294) em todas as pastas
-python3 extract_to_csv.py Registros 00294
+# 3. Filtrar por um identificador (hash) específico em todas as pastas
+python3 extract_to_csv.py Registros a3f5c8d9e2b1a4c6
 ```
+> Um pequeno adendo é que o código é bem sensível ao tamanho das letras. ex: P ≠ p. Então se for executar o código, padronize a forma como você está escrevendo
 
-*Saída*
-Para cada pasta processada, o script cria uma subpasta chamada `saídas/` (dentro da própria pasta de resultados) e salva um arquivo CSV com o nome:
+## Saída
 
-- `resultados_<nome_da_pasta>.csv` (quando processa uma pasta inteira)
-- `saida_<identifier>.csv` (quando filtra por identificador)
+Para cada pasta processada, o script cria uma subpasta `saídas/` e salva um CSV com nome:
 
-*Exemplo de estrutura:*
-```text
-Registros/
-├── Preconceito_Racial_resultados/
-│   ├── xml/
-│   ├── marc/
-│   ├── sutrs/
-│   ├── opac/
-│   └── saídas/
-│       └── saida_00294.csv
-├── outro_termo_resultados/
-│   └── saídas/
-│       └── resultados_outro_termo_resultados.csv
-└── ...
-```
-Para além de gerar uma saída para cada pasta, ao final de sua execução, o código cria um arquivo chamado `resultado_geral.csv`, nele está contido *TODOS* os registros de todas as pesquisas feitas. Ele fica salvo dentro da pasta de Registros da seguinte forma:
-```text
-Registros/
-├── Preconceito_Racial_resultados/
-│   ├── xml/ ...
-│   ├── marc/ ...
-│   ├── sutrs/ ...
-│   ├── opac/ ...
-│   └── saídas/
-│       └── resultados_Preconceito_Racial_resultados.csv
-├── Catimbó_resultados/
-│   └── saídas/
-│       └── resultados_Catimbó_resultados.csv
-├── ... (demais pastas)
-└── resultado_geral.csv  
-```
+- `resultados_<nome_da_pasta>.csv` — quando processa uma pasta inteira
+- `saida_<hash>.csv` — quando filtra por um identificador
 
-## Campos extraídos para o CSV
+Além disso, ao final, é gerado um arquivo consolidado **`resultado_geral.csv`** dentro de `Registros/`, contendo **todos os registros de todas as pesquisas**.
 
-Dentre os diferentes tipos de arquivo, era notável que cada um possuia alguns identificadores que eram únicos de seu formato, pensando nessa variedade de informações, o código escaneia os diferentes tipos de registros e coleta dados importantes para o registro:
+## Campos extraídos
+
+O script escaneia diferentes formatos e coleta os seguintes dados:
 
 | Coluna | Fonte | Descrição |
 | :--- | :--- | :--- |
-| **identifier** | Nome do arquivo | Identificador único do registro (extraído do XML ou sequencial) |
+| **identifier** | Nome do arquivo | Hash SHA-256 (16 caracteres) do registro |
 | **titulo** | XML (`<title>`) | Título completo do trabalho |
-| **autor** | XML (`<contributor>`) | Autor principal (com data e ORCID removidos) |
+| **autor** | XML (`<contributor>`) | Autor principal (sem datas ou ORCIDs) |
 | **co_autor** | XML (`<contributor>`) | Coautores (se houver mais de um contribuidor) |
 | **orientador** | XML (`<contributor>`) | Orientador (último contribuidor, quando há mais de um) |
 | **data** | XML (`<date>`) | Ano de publicação |
 | **paginas** | XML (`<format>`) | Extensão ou número de páginas |
-| **local_publicacao** | XML (`<coverage>`) | Local de publicação (ex: BRASIL) – extraído do XML |
-| **subjects** | XML (`<subject>`) | Assuntos/descritores, separados por `|` (pipe) |
-| **modelo_trabalho** | SUTRS (Tipo de material:) | Tipo de material traduzido (ex: "Tese", "Periódico / Parte de livro") |
-| **descricao** | XML (`<description>`) | Resumo/descrição do trabalho (fallback para SUTRS se ausente) |
-| **local_defesa** | SUTRS (Imprenta:) | Cidade de defesa/publicação (extraída do campo "Imprenta") |
+| **local_publicacao** | XML (`<coverage>`) | Local de publicação (ex: BRASIL) |
+| **subjects** | XML (`<subject>`) | Assuntos/descritores, separados por `\|` |
+| **modelo_trabalho** | SUTRS (`Tipo de material:`) | Tipo traduzido (ex: "Tese", "Periódico") |
+| **descricao** | XML (`<description>`) | Resumo (fallback para SUTRS se ausente) |
+| **local_defesa** | SUTRS (`Imprenta:`) | Cidade de defesa/publicação |
 
 ## Tratamento de informações
 
-- *Limpeza do autor:* Se houver elementos tipo datas ou outros sufixos desnescessários, o código faz a limpeza, deixando apenas o nome.
-
-- *Mapeamento de tipo:* códigos como T, D, P são convertidos para descrições legíveis (ex: T → Tese, P → Periódico / Parte de livro).
-
-- *Decodificação de caracteres:* sequências como S\XC3\XA3o Paulo são automaticamente convertidas para São Paulo durante a extração.
-
-- *Normalização Unicode:* todos os textos são normalizados para a forma NFC, garantindo consistência nos acentos.
-
-- *Fallback de descrição:* se o XML não tiver <description>, o script busca Nota de resumo: no arquivo SUTRS.
+- **Limpeza do autor**: remove datas, ORCIDs e sufixos desnecessários.
+- **Mapeamento de tipo**: códigos como `T`, `D`, `P` são traduzidos para descrições legíveis (`T` → Tese, `P` → Periódico / Parte de livro).
+- **Decodificação de caracteres**: sequências como `S\XC3\XA3o Paulo` são convertidas para `São Paulo`.
+- **Normalização Unicode**: todos os textos passam por normalização NFC, garantindo consistência nos acentos.
+- **Fallback de descrição**: se o XML não tiver `<description>`, o script busca `Nota de resumo:` no SUTRS.
 
 ## Exemplo de saída
 
 | identifier | titulo | autor | co_autor | orientador | data | paginas | local_publicacao | subjects | modelo_trabalho | descricao | local_defesa |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 00294 | Oriente-se marcas da assimilação asiática no Brasil... | Nakamura, Aline Watanabe |  | Ambra, Pedro | 2023 | 142 p | BRASIL | PRECONCEITO RACIAL\|ORIENTALISMO\|... | Tese | A presente pesquisa... | São Paulo |
+| a3f5c8d9e2b1a4c6 | Oriente-se marcas da assimilação asiática no Brasil... | Nakamura, Aline Watanabe |  | Ambra, Pedro | 2023 | 142 p | BRASIL | PRECONCEITO RACIAL\|ORIENTALISMO\|... | Tese | A presente pesquisa... | São Paulo |
